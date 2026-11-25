@@ -1,0 +1,22 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  logic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 语法检查
+        run: |
+          for f in functions/_lib/*.js functions/api/*.js functions/*.js src/worker.js public/app.js test/run.mjs; do
+            node --check "$f"
+          done
+      - name: 业务逻辑自测
+        run: node test/run.mjs
