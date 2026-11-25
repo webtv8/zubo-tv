@@ -1,0 +1,16 @@
+{
+  "name": "cf-multicast-admin",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "description": "多地区组播 IP 替换系统 · Cloudflare Pages + KV 版",
+  "scripts": {
+    "dev": "wrangler pages dev public --kv CONFIG_KV --binding ADMIN_PASSWORD=admin123",
+    "dev:worker": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node test/run.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
