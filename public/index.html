@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex,nofollow">
+  <title>多地区组播 IP 替换系统 - 管理后台</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>📡</text></svg>">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<!-- ============ 登录 ============ -->
+<div id="login-view" class="login-wrap hidden">
+  <div class="login-card">
+    <div class="login-head">
+      <span class="login-icon">🔐</span>
+      <h2>系统登录</h2>
+      <p>多地区组播 IP 替换系统</p>
+    </div>
+    <div id="login-alert" class="alert hidden"></div>
+    <form id="login-form" autocomplete="off">
+      <div class="field">
+        <input type="text" name="username" value="admin" autocomplete="username" hidden>
+        <input type="password" id="login-password" name="password" autocomplete="current-password" placeholder="🔒 请输入管理员密码" required autofocus>
+      </div>
+      <button type="submit" class="btn primary block" id="login-submit">登录系统</button>
+    </form>
+    <div class="login-foot">
+      密码由 Cloudflare 环境变量 <code>ADMIN_PASSWORD</code> 统一管理，系统内不提供修改密码入口。
+    </div>
+  </div>
+</div>
+
+<!-- ============ 后台 ============ -->
+<div id="app-view" class="container hidden">
+  <header class="topbar">
+    <h2>🔧 多地区组播 IP 替换系统</h2>
+    <button class="btn ghost" id="logout-btn">🚪 退出登录</button>
+  </header>
+
+  <div id="alert" class="alert hidden"></div>
+  <div id="config-warning" class="box warn hidden"></div>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-panel="settings">⚙️ 更新组播 IP 端口</button>
+    <button class="tab" data-panel="whitelist">🗂️ 组播主分组管理</button>
+    <button class="tab" data-panel="custom">📡 自定义分组管理</button>
+    <button class="tab" data-panel="output">🔗 输出链接</button>
+  </nav>
+
+  <!-- 更新组播 IP 端口 -->
+  <section class="panel active" id="panel-settings">
+    <h3>⚙️ 基本设置 - IP / 域名 / 端口管理</h3>
+
+    <div class="card">
+      <h4>📡 更新组播代理地址</h4>
+      <form id="target-form">
+        <div class="field">
+          <label for="region-select">选择地区</label>
+          <select id="region-select" required></select>
+          <div class="hint">将更新该主分组下所有子分组、所有频道的「IP / 域名 / 端口」，其余分组不受影响。</div>
+        </div>
+        <div class="field">
+          <label for="target-input">新的地址</label>
+          <input type="text" id="target-input" class="wide" required
+                 placeholder="192.168.1.1 或 192.168.1.1:4022 或 vod.example.com 或 vod.example.com:8080">
+          <div class="hint" id="target-hint">
+            支持四种写法：<b>IP</b>、<b>域名</b>、<b>IP:端口</b>、<b>域名:端口</b>（也可以直接粘贴完整 URL）
+          </div>
+        </div>
+        <button type="submit" class="btn primary" id="target-submit">更新地址</button>
+      </form>
+    </div>
+
+    <div class="box info">
+      <b>📋 当前各主分组地址：</b>
+      <div id="target-list" class="target-list"></div>
+    </div>
+
+    <div class="box warn">
+      <b>⚠️ 更新说明：</b>
+      <ul>
+        <li>只替换协议头之后的主机部分，路径、端口后的 <code>/rtp/...</code> 等全部保留；</li>
+        <li>新地址不带端口时，会同时去掉频道原有的端口；带端口时则替换为新端口；</li>
+        <li>支持 http / https / rtsp / rtp / udp / hls 以及无协议头的地址。</li>
+      </ul>
+    </div>
+
+    <div class="stats" id="stats-settings"></div>
+  </section>
+
+  <!-- 组播主分组管理 -->
+  <section class="panel" id="panel-whitelist">
+    <h3>🗂️ 组播主分组管理 - 新增 / 删除 / 编辑地区</h3>
+    <div class="box info"><b>📋 当前组播主分组：</b><div id="whitelist-list" class="group-list"></div></div>
+
+    <div class="card">
+      <h4>➕ 添加新主分组</h4>
+      <form id="whitelist-add-form">
+        <div class="field">
+          <label>主分组名称</label>
+          <input type="text" name="name" class="narrow" placeholder="例如：江苏组播" required>
+        </div>
+        <div class="field">
+          <label>该分组的地址（IP / 域名 / IP:端口 / 域名:端口）</label>
+          <input type="text" name="target" class="wide" placeholder="192.168.1.10:4022" required>
+          <div class="hint">添加后会统一改写该分组下所有频道的主机部分。</div>
+        </div>
+        <div class="field">
+        <div class="field-head">
+          <label>子分组内容（子分组 + 频道）</label>
+          <button type="button" class="btn ghost mini" data-clear>清空</button>
+        </div>
+          <textarea name="text" rows="12" placeholder="卫视频道,#genre#
+CCTV1,http://125.33.94.8:4022/rtp/239.3.1.129:8008
+CCTV2,http://125.33.94.8:4022/rtp/239.3.1.60:8084
+
+体育频道,#genre#
+CCTV5,http://125.33.94.8:4022/rtp/239.3.1.130:8009"></textarea>
+        </div>
+        <button type="submit" class="btn primary">添加主分组</button>
+      </form>
+    </div>
+
+    <div class="box warn">
+      <b>⚠️ 提示：</b>删除分组会同时删除其下所有频道且不可恢复；点击分组名称可展开编辑；分组与频道的顺序按保存时的顺序输出。
+    </div>
+    <div class="stats" id="stats-whitelist"></div>
+  </section>
+
+  <!-- 自定义分组管理 -->
+  <section class="panel" id="panel-custom">
+    <h3>📡 自定义分组管理</h3>
+    <div class="box danger">
+      <b>🚫 命名限制：</b>自定义分组名不能与组播主分组名相同；自定义分组内的子分组名、频道名可以和组播分组重复。已占用名称：
+      <span id="whitelist-badges" class="badges"></span>
+    </div>
+
+    <div class="box info"><b>📋 当前自定义分组：</b><div id="custom-list" class="group-list"></div></div>
+
+    <div class="card">
+      <h4>➕ 添加新自定义分组</h4>
+      <form id="custom-add-form">
+        <div class="field">
+          <label>分组名称</label>
+          <input type="text" name="name" class="narrow" placeholder="例如：我的电影" required>
+        </div>
+        <div class="field">
+        <div class="field-head">
+          <label>子分组内容（子分组 + 频道）</label>
+          <button type="button" class="btn ghost mini" data-clear>清空</button>
+        </div>
+          <textarea name="text" rows="12" placeholder="电影频道,#genre#
+电影1,http://example.com/movie1.m3u8
+电影2,http://example.com/movie2.m3u8"></textarea>
+        </div>
+        <button type="submit" class="btn primary">添加自定义分组</button>
+      </form>
+    </div>
+
+    <div class="stats" id="stats-custom"></div>
+  </section>
+
+  <!-- 输出链接 -->
+  <section class="panel" id="panel-output">
+    <h3>🔗 输出链接</h3>
+
+    <div class="card">
+      <h4>📥 固定在线地址（包含所有组播 + 自定义频道）</h4>
+      <div class="link-row">
+        <div>
+          <strong>TXT 列表（电视家格式）</strong>
+          <a id="link-txt" class="out-link" href="#" target="_blank" rel="noopener"></a>
+        </div>
+        <button class="btn ghost" data-copy="txt">复制链接</button>
+      </div>
+      <div class="link-row">
+        <div>
+          <strong>M3U 列表（标准格式）</strong>
+          <a id="link-m3u" class="out-link" href="#" target="_blank" rel="noopener"></a>
+        </div>
+        <button class="btn ghost" data-copy="m3u">复制链接</button>
+      </div>
+      <div class="box info" style="margin-top:16px">
+        <b>⚡ 说明：</b>
+        <ul>
+          <li>每次访问都会实时读取最新配置，无需手动更新链接；</li>
+          <li>这些地址<b>不需要密码</b>，可直接填进 VLC / PotPlayer / IPTV App；</li>
+          <li>自定义分组永远排在组播分组之后；</li>
+          <li>更新 IP 地址后，播放器重新拉取一次列表即可。</li>
+        </ul>
+      </div>
+    </div>
+    <div class="stats" id="stats-output"></div>
+  </section>
+
+  <footer class="foot">
+    <p><strong>多地区组播 IP 替换系统</strong> · Cloudflare Pages + KV</p>
+    <p>组播分组管理 · 多地区独立地址 · 自定义分组 · TXT / M3U 输出</p>
+  </footer>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
