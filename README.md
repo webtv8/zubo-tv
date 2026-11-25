@@ -1,9 +1,11 @@
 # 多地区组播 IP 替换系统（Cloudflare 版）
 
+原 PHP 版本（`index.php` + `api.php` + `classes/`）重构为 **Cloudflare Pages Functions + KV** 版本：
 
 - 部署：GitHub 仓库 → Cloudflare Pages 连接 Git，推代码即自动部署，**只用免费额度**
 - 数据：KV 存一份配置 JSON（免费额度：10 万次读/天、1000 次写/天）
-- 登录密码：Cloudflare 环境变量 `ADMIN_PASSWORD`，**系统内不提供修改密码功能**
+- 登录密码：只认 Cloudflare 环境变量 `ADMIN_PASSWORD`，**系统内不再提供修改密码功能**
+- 地址更新：`更新组播 IP 端口` 支持 **IP / 域名 / IP:端口 / 域名:端口** 四种写法
 
 ---
 
@@ -37,8 +39,10 @@ vod.example.com:8080        → 替换成新域名 + 新端口
 http://vod.example.com:8080/ → 粘贴完整 URL 也能识别（自动去掉协议头和末尾斜杠）
 ```
 
-替换只动协议头之后的主机段：
+替换只动协议头之后的主机段：`http://125.33.94.8:4022/rtp/239.3.1.129:8008` → `http://vod.example.com:8080/rtp/239.3.1.129:8008`。
 支持 `http / https / rtsp / rtp / udp / hls`，以及没有协议头的裸地址。端口必须是 1–65535 的数字（最多 5 位）。
+
+**哪些频道会被改**（对齐原 `Utils::updateUrlIP` 的保守策略，避免把分组里混着的第三方源改坏）：
 
 - 路径里带 `/rtp/` 的组播代理地址 → 改
 - 主机等于该分组当前地址（同一条代理）的地址 → 改，路径不变
@@ -48,57 +52,66 @@ http://vod.example.com:8080/ → 粘贴完整 URL 也能识别（自动去掉协
 
 ## 一·五、输出顺序
 
+### 1. 输出永远是全部分组，不做运营商分流
+
+这是按需求做的**简化**：访问 `/txt`、`/m3u` 时不再查访问者 IP、不判断运营商，直接返回全部频道。
 
 - 顺序固定：**组播主分组**按 `whitelist_groups` 的顺序排在前面，**自定义分组**永远排在最后（自定义分组之间按首次出现的顺序）
 - 子分组顺序 = 你在文本框里保存的顺序
-
+- 不再有 `?isp=` 参数、没有 `X-ISP` / `X-ISP-Source` 响应头、配置里也没有 `group_isp` / `isp_filter` 字段（旧配置里这两个键会被自动忽略，不用手工清理）
 - 想按地区分流多个播放器？维护多份配置没意义，直接给不同播放器用 `/txt` 和 `/m3u` 两个地址即可，或者按分组名各自订阅
 
 ### 2. 频道地址原样输出
 
-`/txt`、`/m3u` 里每个频道的地址就是你保存的那个地址，不做任何改写。要换地址就在「更新组播 IP 端口」里改分组地址，保存后播放器重新拉一次列表即可。
+`/txt`、`/m3u` 里每个频道的地址就是你保存的那个地址，不做任何改写：没有 302 跳转、没有 `/rtp?id=` 拼接、也没有输出设置开关。要换地址就在「更新组播 IP 端口」里改分组地址，保存后播放器重新拉一次列表即可。
 
 ---
 
 ## 二、部署步骤（Pages + 连接 GitHub，推荐）
 
-### 1. Cloudflare 建 KV 命名空间
+**第 1 步：创建 KV 命名空间**
 
-控制台 → **Storage & Databases → KV** → **Create namespace**，名称随意（如 `mrs-config`）。
+- 左侧菜单 → **存储和数据库** → **KV** → **创建命名空间**（Create namespace）
+- 名称填 `mrs-config`，创建后列表里会显示这个命名空间的 **ID**（一串十六进制），先复制留着，下一步绑定用它的名字即可，不用填 ID。
 
-### 2. Pages 连接仓库
+**第 2 步：创建 Pages 项目（继续使用 GitHub 的方式）**
 
-控制台 → **Workers & Pages → Create → Pages → Connect to Git** → 选刚推的仓库，构建配置填：
+- 左侧菜单 → **Workers 和 Pages** → **创建** → 选 **Pages** 标签 → **连接到 Git** → 点 **继续使用 GitHub**（Continue with GitHub）
+- 首次会跳 GitHub 授权页，选 **Only select repositories** → 勾选 `webtv8/zubo-tv` → 授权
+- 选仓库 `zubo-tv` → **开始设置**，按下表填：
 
-| 项 | 值 |
+表格
+
+| 表单项（中文界面） | 填什么 |
 | --- | --- |
-| Framework preset | `None` |
-| Build command | 留空 |
-| Build output directory | `public` |
-| Root directory | `/`（默认） |
+| 项目名称 | `zubo-tv`（域名就是 zubo-tv.pages.dev，想换名字现在改） |
+| 生产分支 | `main` |
+| 框架预设 | **无**（None） |
+| 构建命令 | **留空** |
+| 构建输出目录 | `public` |
+| 根目录 | 默认 `/` |
 
-> 不需要 npm install / 构建步骤：`public/` 是静态页面，`functions/` 由 Pages 自动编译。
+- 点 **保存并部署**。这一步只是把静态页 + `functions/` 编译上去，`ADMIN_PASSWORD` 还没设、KV 也还没绑，登录会失败，属正常。
 
-### 3. 绑定 KV
+**第 3 步：绑定 KV 命名空间**
 
-项目 → **Settings → Bindings（或 Functions → KV namespace bindings）** → Add：
+- 进入项目 → **设置** → **绑定**（Bindings）→ **添加** → 类型选 **KV 命名空间**
+- 变量名称：`CONFIG_KV`（必须一字不差，代码里按这个名字取）
+- KV 命名空间：选第 1 步建的 `mrs-config`
+- 环境两个都要加：先加 **生产**，再加一次 **预览**（Preview）
 
-- Variable name：`CONFIG_KV`（**必须一字不差**）
-- KV namespace：选第 2 步创建的那个
-- 生产环境与 Preview 环境都加上
+**第 4 步：设置管理员密码**
 
-### 4. 设置管理员密码
+- 项目 → **设置** → **变量和机密**（Variables and Secrets）→ **添加**
+- 名称 `ADMIN_PASSWORD`，值填你的登录密码，类型选 **机密**（Secret，加密存储，控制台不再显示明文）
+- 可选再加两条（类型选「文本」即可）：
+  - `SESSION_SECRET`：一串随机长字符串，不填就用 `ADMIN_PASSWORD` 派生
+  - `SESSION_TTL_HOURS`：`168`（登录有效期 7 天）
+- 同样给 **生产** 和 **预览** 两个环境都加。
 
-项目 → **Settings → Variables and Secrets** → Add：
+**第 5 步：重新部署并验收**
 
-- Name：`ADMIN_PASSWORD`
-- Value：你的登录密码
-- Type：**Secret**（加密存储）
-
-可选再加：
-
-- `SESSION_SECRET`：会话签名密钥（建议随机长字符串；不填则用 `ADMIN_PASSWORD` 派生）
-- `SESSION_TTL_HOURS`：登录有效期，默认 `168`（7 天）
+- 项目 → **部署**（Deployments）→ 最新一次部署右侧的菜单 → **重新部署**（Retry deployment）。第 3、4 步加的绑定和机密**必须重新部署才生效**。
 
 ### 6. 重新部署并访问
 
@@ -110,24 +123,7 @@ http://vod.example.com:8080/ → 粘贴完整 URL 也能识别（自动去掉协
 
 ---
 
-## 三、Workers 方式部署（可选）
-
-同一个仓库也能用 Workers 部署，逻辑完全共用：
-
-```bash
-npm install
-npx wrangler kv namespace create CONFIG_KV     # 把返回的 id 填进 wrangler.toml
-npx wrangler secret put ADMIN_PASSWORD
-npx wrangler deploy
-```
-
-`wrangler.toml` 里 `main = "src/worker.js"`，`[assets] directory = "./public"`，`[[kv_namespaces]] binding = "CONFIG_KV"`。
-
-> 注意：Pages 走 Git 自动部署时**不读** `wrangler.toml`，变量和 KV 都在控制台配；Workers 部署才用 `wrangler.toml`。
-
----
-
-## 四、本地开发
+## 三、本地开发
 
 ```bash
 npm install
@@ -147,7 +143,7 @@ npm test
 
 ---
 
-## 五、目录结构
+## 四、目录结构
 
 ```
 cf-multicast-admin/
@@ -167,7 +163,6 @@ cf-multicast-admin/
 │   └── app.js
 ├── src/worker.js              # Workers 部署入口（可选）
 ├── test/run.mjs               # 逻辑自测
-├── wrangler.toml
 └── package.json
 ```
 
@@ -210,4 +205,3 @@ cf-multicast-admin/
 - **输出缓存**：`/txt`、`/m3u` 返回 `Cache-Control: no-store`，播放器每次拉取都是最新内容。
 - **安全**：密码只存在于环境变量与请求内存中；会话 Cookie 为 `HttpOnly + SameSite=Lax + Secure`；所有写接口校验 `Content-Type: application/json` 与 `Origin`。
 - **未绑定 KV 时**：页面会红色提示，所有保存操作都会失败——先绑 `CONFIG_KV` 再使用。
-
